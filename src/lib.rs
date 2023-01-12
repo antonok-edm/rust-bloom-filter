@@ -15,7 +15,7 @@ use std::f64;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-use bit_vec::BitVec;
+use bitvec::prelude::BitVec;
 #[cfg(feature = "random")]
 use getrandom::getrandom;
 #[cfg(feature = "serde")]
@@ -23,9 +23,9 @@ use siphasher::reexports::serde;
 use siphasher::sip::SipHasher13;
 
 pub mod reexports {
+    pub use bitvec;
     #[cfg(feature = "random")]
     pub use ::getrandom;
-    pub use bit_vec;
     pub use siphasher;
     #[cfg(feature = "serde")]
     pub use siphasher::reexports::serde;
@@ -36,7 +36,7 @@ pub mod reexports {
 #[cfg_attr(feature = "serde", serde(crate = "serde"))]
 #[derive(Clone, Debug)]
 pub struct Bloom<T: ?Sized> {
-    bit_vec: BitVec,
+    bit_vec: BitVec<u8>,
     bitmap_bits: u64,
     k_num: u32,
     sips: [SipHasher13; 2],
@@ -57,7 +57,8 @@ impl<T: ?Sized> Bloom<T> {
             .checked_mul(8u64)
             .unwrap();
         let k_num = Self::optimal_k_num(bitmap_bits, items_count);
-        let bitmap = BitVec::from_elem(usize::try_from(bitmap_bits).unwrap(), false);
+        let mut bitmap = BitVec::new();
+        bitmap.resize(usize::try_from(bitmap_bits).unwrap(), false);
         let mut k1 = [0u8; 16];
         let mut k2 = [0u8; 16];
         k1.copy_from_slice(&seed[0..16]);
@@ -104,7 +105,7 @@ impl<T: ?Sized> Bloom<T> {
     /// `ByteVec` structure. The state is assumed to be retrieved from an
     /// existing bloom filter.
     pub fn from_bit_vec(
-        bit_vec: BitVec,
+        bit_vec: BitVec<u8>,
         bitmap_bits: u64,
         k_num: u32,
         sip_keys: [(u64, u64); 2],
@@ -131,7 +132,7 @@ impl<T: ?Sized> Bloom<T> {
         k_num: u32,
         sip_keys: [(u64, u64); 2],
     ) -> Self {
-        Self::from_bit_vec(BitVec::from_bytes(bytes), bitmap_bits, k_num, sip_keys)
+        Self::from_bit_vec(BitVec::from_slice(bytes), bitmap_bits, k_num, sip_keys)
     }
 
     /// Compute a recommended bitmap size for items_count items
@@ -166,8 +167,13 @@ impl<T: ?Sized> Bloom<T> {
         let mut hashes = [0u64, 0u64];
         for k_i in 0..self.k_num {
             let bit_offset = (self.bloom_hash(&mut hashes, item, k_i) % self.bitmap_bits) as usize;
-            if self.bit_vec.get(bit_offset).unwrap() == false {
-                return false;
+            match self.bit_vec.get(bit_offset) {
+                Some(b) => {
+                    if !b {
+                        return false;
+                    }
+                }
+                None => return false,
             }
         }
         true
@@ -193,11 +199,11 @@ impl<T: ?Sized> Bloom<T> {
 
     /// Return the bitmap as a vector of bytes
     pub fn bitmap(&self) -> Vec<u8> {
-        self.bit_vec.to_bytes()
+        self.bit_vec.clone().into_vec()
     }
 
     /// Return the bitmap as a "BitVec" structure
-    pub fn bit_vec(&self) -> &BitVec {
+    pub fn bit_vec(&self) -> &BitVec<u8> {
         &self.bit_vec
     }
 
@@ -247,7 +253,7 @@ impl<T: ?Sized> Bloom<T> {
 
     /// Set all of the bits in the filter, making it appear like every key is in the set
     pub fn fill(&mut self) {
-        self.bit_vec.set_all()
+        self.bit_vec.set_elements(0b11111111u8)
     }
 
     /// Test if there are no elements in the set
