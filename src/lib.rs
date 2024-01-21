@@ -16,7 +16,7 @@ use core::f64;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 
-use bitvec::prelude::BitVec;
+use bitvec::prelude::BitArray;
 #[cfg(feature = "random")]
 use getrandom::getrandom;
 #[cfg(feature = "serde")]
@@ -36,8 +36,8 @@ pub mod reexports {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(crate = "serde"))]
 #[derive(Clone, Debug)]
-pub struct Bloom<T: ?Sized> {
-    bit_vec: BitVec<u8>,
+pub struct Bloom<T: ?Sized, const S: usize> {
+    bit_vec: BitArray<[u8; S]>,
     bitmap_bits: u64,
     k_num: u32,
     sips: [SipHasher13; 2],
@@ -45,7 +45,7 @@ pub struct Bloom<T: ?Sized> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: ?Sized> Bloom<T> {
+impl<T: ?Sized, const S: usize> Bloom<T, S> {
     /// Create a new bloom filter structure.
     /// bitmap_size is the size in bytes (not bits) that will be allocated in
     /// memory items_count is an estimation of the maximum number of items
@@ -58,8 +58,8 @@ impl<T: ?Sized> Bloom<T> {
             .checked_mul(8u64)
             .unwrap();
         let k_num = Self::optimal_k_num(bitmap_bits, items_count);
-        let mut bitmap = BitVec::new();
-        bitmap.resize(usize::try_from(bitmap_bits).unwrap(), false);
+        let bitmap = bitvec::array::BitArray::new([0u8; S]);
+        assert_eq!(bitmap_size, S);
         let mut k1 = [0u8; 16];
         let mut k2 = [0u8; 16];
         k1.copy_from_slice(&seed[0..16]);
@@ -79,10 +79,10 @@ impl<T: ?Sized> Bloom<T> {
     /// memory items_count is an estimation of the maximum number of items
     /// to store.
     #[cfg(feature = "random")]
-    pub fn new(bitmap_size: usize, items_count: usize) -> Self {
+    pub fn new(items_count: usize) -> Self {
         let mut seed = [0u8; 32];
         getrandom(&mut seed).unwrap();
-        Self::new_with_seed(bitmap_size, items_count, &seed)
+        Self::new_with_seed(S, items_count, &seed)
     }
 
     /// Create a new bloom filter structure.
@@ -91,7 +91,8 @@ impl<T: ?Sized> Bloom<T> {
     #[cfg(feature = "random")]
     pub fn new_for_fp_rate(items_count: usize, fp_p: f64) -> Self {
         let bitmap_size = Self::compute_bitmap_size(items_count, fp_p);
-        Bloom::new(bitmap_size, items_count)
+        assert_eq!(bitmap_size, S);
+        Bloom::new(items_count)
     }
 
     /// Create a new bloom filter structure.
@@ -106,7 +107,7 @@ impl<T: ?Sized> Bloom<T> {
     /// `ByteVec` structure. The state is assumed to be retrieved from an
     /// existing bloom filter.
     pub fn from_bit_vec(
-        bit_vec: BitVec<u8>,
+        bit_vec: BitArray<[u8; S]>,
         bitmap_bits: u64,
         k_num: u32,
         sip_keys: [(u64, u64); 2],
@@ -122,18 +123,6 @@ impl<T: ?Sized> Bloom<T> {
             sips,
             _phantom: PhantomData,
         }
-    }
-
-    /// Create a bloom filter structure with an existing state given as a byte
-    /// array. The state is assumed to be retrieved from an existing bloom
-    /// filter.
-    pub fn from_existing(
-        bytes: &[u8],
-        bitmap_bits: u64,
-        k_num: u32,
-        sip_keys: [(u64, u64); 2],
-    ) -> Self {
-        Self::from_bit_vec(BitVec::from_slice(bytes), bitmap_bits, k_num, sip_keys)
     }
 
     /// Compute a recommended bitmap size for items_count items
@@ -193,17 +182,6 @@ impl<T: ?Sized> Bloom<T> {
         found
     }
 
-    /// Return the bitmap as a vector of bytes
-    #[cfg(feature = "std")]
-    pub fn bitmap(&self) -> Vec<u8> {
-        self.bit_vec.clone().into_vec()
-    }
-
-    /// Return the bitmap as a "BitVec" structure
-    pub fn bit_vec(&self) -> &BitVec<u8> {
-        &self.bit_vec
-    }
-
     /// Return the number of bits in the filter
     pub fn number_of_bits(&self) -> u64 {
         self.bitmap_bits
@@ -246,11 +224,6 @@ impl<T: ?Sized> Bloom<T> {
     /// Clear all of the bits in the filter, removing all keys from the set
     pub fn clear(&mut self) {
         self.bit_vec.fill(false)
-    }
-
-    /// Set all of the bits in the filter, making it appear like every key is in the set
-    pub fn fill(&mut self) {
-        self.bit_vec.set_elements(0b11111111u8)
     }
 
     /// Test if there are no elements in the set
